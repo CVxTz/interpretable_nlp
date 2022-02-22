@@ -1,8 +1,14 @@
-import re
+from pathlib import Path
 
-from nltk.tokenize import sent_tokenize
-from transformers import DistilBertTokenizer
+from tokenizers import Tokenizer
 
-TOKENIZER = DistilBertTokenizer.from_pretrained("distilbert-base-uncased")
-PAD_IDX = TOKENIZER.convert_tokens_to_ids("[PAD]")
-MAX_LEN = 512
+TOKENIZER_PATH = Path(__file__).parent / "tokenizer.json"
+TOKENIZER = Tokenizer.from_file(str(TOKENIZER_PATH))
+PAD_IDX = TOKENIZER.token_to_id("[PAD]")
+VOCAB_SIZE = TOKENIZER.get_vocab_size()
+MAX_LEN = 256
+
+
+def tokenize(text):
+    output = TOKENIZER.encode(text)
+    return output

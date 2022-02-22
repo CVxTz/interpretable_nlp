@@ -24,4 +24,6 @@ setup(
         "Topic :: Utilities",
     ],
     install_requires=REQUIRED,
+    data_files=[("interpretable_nlp", ["interpretable_nlp/tokenizer.json"])],
+    include_package_data=True,
 )

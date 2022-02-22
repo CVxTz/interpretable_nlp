@@ -1,47 +1,98 @@
+import math
+
 import pytorch_lightning as pl
 import torch
-from torch import nn
+import torch.nn as nn
 from torch.nn import functional as F
-from transformers import DistilBertModel, get_cosine_schedule_with_warmup
+from transformers import get_cosine_schedule_with_warmup
 
 
-class DistilBert(pl.LightningModule):
+class PositionalEncoding(nn.Module):
+    #  https://pytorch.org/tutorials/beginner/transformer_tutorial.html
+
+    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000):
+        super().__init__()
+        self.dropout = nn.Dropout(p=dropout)
+
+        position = torch.arange(max_len).unsqueeze(1)
+        div_term = torch.exp(
+            torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model)
+        )
+        pe = torch.zeros(1, max_len, d_model)
+        pe[0:, :, 0::2] = torch.sin(position * div_term)
+        pe[0:, :, 1::2] = torch.cos(position * div_term)
+        self.register_buffer("pe", pe)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x: Tensor, shape [seq_len, batch_size, embedding_dim]
+        """
+
+        x = x + self.pe[:, : x.size(1)]
+
+        return self.dropout(x)
+
+
+class TokenEmbedding(nn.Module):
+    #  https://pytorch.org/tutorials/beginner/translation_transformer.html
+    def __init__(self, vocab_size: int, emb_size):
+        super(TokenEmbedding, self).__init__()
+        self.embedding = nn.Embedding(vocab_size, emb_size)
+        self.emb_size = emb_size
+
+    def forward(self, tokens: torch.Tensor):
+        return self.embedding(tokens.long()) * math.sqrt(self.emb_size)
+
+
+class Transformer(pl.LightningModule):
     def __init__(
         self,
-        n_classes=1,
+        vocab_size,
+        channels=256,
+        dropout=0.3,
+        n_outputs=3,
         lr=1e-4,
-        dropout=0.2,
-        keep_layers=("transformer.layer.5",),
-        loss_fn="bce",
     ):
         super().__init__()
 
-        self.save_hyperparameters()
-
         self.lr = lr
+        self.dropout = dropout
+        self.vocab_size = vocab_size
+        self.n_outputs = n_outputs
 
-        self.loss_fn = loss_fn
+        self.embeddings = TokenEmbedding(vocab_size=self.vocab_size, emb_size=channels)
 
-        self.n_classes = n_classes
+        self.pos_encoder = PositionalEncoding(d_model=channels, dropout=dropout)
 
-        self.distil_bert = DistilBertModel.from_pretrained("distilbert-base-uncased")
+        encoder_layer = torch.nn.TransformerEncoderLayer(
+            batch_first=True, d_model=channels, nhead=4, dim_feedforward=4 * channels
+        )
 
-        for name, param in self.distil_bert.named_parameters():
-            if not any(name.startswith(a) for a in keep_layers):
-                param.requires_grad = False
+        self.encoder = torch.nn.TransformerEncoder(
+            encoder_layer=encoder_layer, num_layers=6
+        )
 
-        self.do = nn.Dropout(p=dropout)
+        self.linear = torch.nn.Linear(channels, self.n_outputs)
 
-        self.out_linear = nn.Linear(self.distil_bert.config.dim, n_classes)
+        self.do = nn.Dropout(p=self.dropout)
+
+    def encode(self, x):
+
+        x = self.embeddings(x)
+        x = self.pos_encoder(x)
+
+        x = self.encoder(x)
+
+        x = x[:, 0, :]
+
+        return x
 
     def forward(self, x):
-        x = self.distil_bert(x).last_hidden_state  # [batch, seq_len, config.dim]
+        x = self.do(self.encode(x))
+        x = self.linear(x)
 
-        x = self.do(x[:, 0, :])
-
-        out = self.out_linear(x)
-
-        return torch.sigmoid(out)
+        return x
 
     def training_step(self, batch, batch_idx):
         return self._step(batch, batch_idx, name="train")
@@ -57,17 +108,14 @@ class DistilBert(pl.LightningModule):
 
         y_hat = self(x)
 
-        y_hat = y_hat.view(-1)
+        y_hat = y_hat
         y = y.view(-1)
 
-        if self.loss_fn == "bce":
-            loss = F.binary_cross_entropy(
-                y_hat, torch.clip(y, 0.01, 0.99), reduction="mean"
-            )
-        else:
-            loss = F.l1_loss(y_hat, torch.clip(y, 0.01, 0.99), reduction="mean")
+        loss = F.cross_entropy(y_hat, y)
 
-        acc = ((y > 0.5) == (y_hat > 0.5)).type(torch.float).mean()
+        _, predicted = torch.max(y_hat, 1)
+
+        acc = (y == predicted).double().mean()
 
         self.log(f"{name}_loss", loss)
         self.log(f"{name}_acc", acc)
