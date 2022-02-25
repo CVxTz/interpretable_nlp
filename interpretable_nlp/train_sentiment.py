@@ -17,20 +17,33 @@ from interpretable_nlp.models import Transformer
 from interpretable_nlp.nlp_utils import MAX_LEN, PAD_IDX, VOCAB_SIZE, tokenize
 
 
+def star_to_class(star):
+
+    if star <= 2:
+        return 0
+    elif star == 3:
+        return 1
+    else:
+        return 2
+
+
 class Dataset(torch.utils.data.Dataset):
     def __init__(self, dataframe):
         self.dataframe = dataframe
-        self.rating_to_indexes = {i: dataframe.index[dataframe['star_rating'] == i].tolist() for i in range(1, 6)}
+        self.rating_to_indexes = {
+            i: dataframe.index[dataframe["star_rating"] == i].tolist()
+            for i in range(1, 6)
+        }
 
     def __len__(self):
         return self.dataframe.shape[0]
 
     def __getitem__(self, _):
-        label_ = random.randint(1, 5)
-        idx = random.choice(self.rating_to_indexes[label_])
+        star = random.randint(1, 5)
+        idx = random.choice(self.rating_to_indexes[star])
 
-        text = df.loc[idx, "review_body"]
-        label = df.loc[idx, "star_rating"] - 1
+        text = str(df.loc[idx, "review_body"])
+        label = star_to_class(df.loc[idx, "star_rating"])
 
         x = tokenize(text).ids
         y = label
@@ -106,7 +119,7 @@ if __name__ == "__main__":
         collate_fn=partial(generate_batch, pad_idx=PAD_IDX),
     )
 
-    model = Transformer(lr=1e-4, n_outputs=5, vocab_size=VOCAB_SIZE)
+    model = Transformer(lr=1e-4, n_outputs=3, vocab_size=VOCAB_SIZE)
 
     # model.load_state_dict(torch.load(model_path)["state_dict"])
 
